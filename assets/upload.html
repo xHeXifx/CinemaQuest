@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cinema Videos</title>
+<style>
+  :root {
+    --bg: #f6f6f8; --card: #ffffff; --text: #1b1b1f; --muted: #6b6b76; --border: #e2e2e8;
+    --accent: #4f46e5; --accent-text: #ffffff; --ok: #15803d; --warn: #b45309; --bar: #e8e8ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121216; --card: #1c1c22; --text: #ececf1; --muted: #9a9aa6; --border: #2c2c35;
+      --accent: #818cf8; --accent-text: #0f0f14; --ok: #4ade80; --warn: #fbbf24; --bar: #2c2c35;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 28px 0 10px; }
+  .intro { color: var(--muted); margin: 0 0 8px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; }
+  .row { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+  .song { font-weight: 600; overflow-wrap: anywhere; }
+  .meta { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .meta a { color: var(--accent); }
+  .status { font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .status.ok { color: var(--ok); }
+  .status.missing { color: var(--warn); }
+  .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  button, label.button {
+    font: inherit; font-size: 14px; border-radius: 7px; padding: 6px 12px; cursor: pointer;
+    border: 1px solid var(--border); background: transparent; color: var(--text);
+  }
+  label.button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  input[type=file] { display: none; }
+  progress { width: 100%; height: 6px; margin-top: 10px; appearance: none; border: 0; border-radius: 3px; background: var(--bar); }
+  progress::-webkit-progress-bar { background: var(--bar); border-radius: 3px; }
+  progress::-webkit-progress-value { background: var(--accent); border-radius: 3px; }
+  progress::-moz-progress-bar { background: var(--accent); border-radius: 3px; }
+  .message { font-size: 13px; margin-top: 6px; color: var(--muted); }
+  .empty { color: var(--muted); }
+  code { font-size: 12px; overflow-wrap: anywhere; }
+  .search { width: 100%; font: inherit; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); margin-top: 12px; }
+  form.config { display: grid; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+  form.config label { display: grid; gap: 4px; font-size: 13px; font-weight: 600; }
+  form.config input { font: inherit; font-weight: 400; padding: 7px 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); width: 100%; }
+  form.config .help { font-weight: 400; color: var(--muted); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .status.none { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Cinema videos</h1>
+  <p class="intro">Maps on your Quest and their Cinema videos. Download a map's video on this device (the YouTube link, or the yt-dlp command), then upload it here. It's saved into the map's folder with the name Cinema expects.</p>
+  <p class="intro">Maps without a config can get one too: use <b>Add video</b> to pick a YouTube video and set its offset. Changes apply from the next time you start the song. Keep Beat Saber open in the menu while using this page.</p>
+  <input class="search" id="search" type="search" placeholder="Search songs or mappers">
+  <div id="content"><p class="empty">Loading maps…</p></div>
+</main>
+<script>
+const content = document.getElementById("content");
+const search = document.getElementById("search");
+let maps = [];
+
+function el(tag, props = {}, ...children) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children.filter(c => c !== null && c !== undefined && c !== false));
+  return node;
+}
+
+function formatDuration(seconds) {
+  if (!seconds) return null;
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function ytDlpCommand(map) {
+  return `yt-dlp -f "bv*[vcodec^=avc1][height<=1080][ext=mp4]/bv*[height<=1080][ext=mp4]/b" "https://www.youtube.com/watch?v=${map.videoID}"`;
+}
+
+// Accepts a bare ID or any common YouTube link form
+function parseVideoID(text) {
+  text = text.trim();
+  if (/^[A-Za-z0-9_-]{11}$/.test(text)) return text;
+  const match = text.match(/(?:v=|youtu\.be\/|shorts\/|embed\/|live\/)([A-Za-z0-9_-]{11})/);
+  return match ? match[1] : null;
+}
+
+function matchesSearch(map) {
+  const query = search.value.trim().toLowerCase();
+  if (!query) return true;
+  return [map.songName, map.songAuthor, map.mapper, map.title].some(v => (v || "").toLowerCase().includes(query));
+}
+
+async function fetchMaps() {
+  return await (await fetch("/api/maps", { cache: "no-store" })).json();
+}
+
+// Re-renders one map's card after a change, leaving other cards (and their forms or uploads) alone
+async function refreshMap(index, card) {
+  try {
+    maps = await fetchMaps();
+  } catch {
+    return;
+  }
+  const map = maps.find(m => m.index === index);
+  if (map) card.replaceWith(renderMap(map));
+}
+
+function upload(map, file, card) {
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  const progress = el("progress", { max: 1, value: 0 });
+  const message = el("div", { className: "message", textContent: `Uploading ${file.name}…` });
+  card.querySelector(".upload-status")?.remove();
+  card.append(el("div", { className: "upload-status" }, progress, message));
+
+  const xhr = new XMLHttpRequest();
+  xhr.open("PUT", `/api/upload/${map.index}?ext=${encodeURIComponent(ext)}`);
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    progress.value = e.loaded / e.total;
+    message.textContent = `Uploading ${file.name}… ${Math.round(100 * e.loaded / e.total)}%`;
+  };
+  xhr.onload = () => {
+    if (xhr.status === 200) {
+      refreshMap(map.index, card);
+    } else {
+      message.textContent = `Upload failed: ${xhr.responseText || xhr.status}`;
+    }
+  };
+  xhr.onerror = () => { message.textContent = "Upload failed: the Quest stopped responding."; };
+  xhr.send(file);
+}
+
+function configForm(map, card) {
+  const link = el("input", { name: "link", required: true, placeholder: "https://www.youtube.com/watch?v=…",
+    value: map.videoID ? `https://www.youtube.com/watch?v=${map.videoID}` : "" });
+  const title = el("input", { name: "title", placeholder: "Optional, e.g. the video's title on YouTube", value: map.title || "" });
+  const offset = el("input", { name: "offset", type: "number", step: 1, value: map.offset ?? 0 });
+  const message = el("div", { className: "message" });
+  const save = el("button", { type: "submit", className: "primary", textContent: map.hasConfig ? "Save" : "Add video" });
+  const cancel = el("button", { type: "button", textContent: "Cancel" });
+
+  const form = el("form", { className: "config" },
+    el("label", {}, "YouTube video", link),
+    el("label", {}, "Title", title),
+    el("label", {}, "Offset (ms)", offset,
+      el("span", { className: "help", textContent: "Where the video should be when the song starts. If the music in the video starts 4 seconds later than in the song, use 4000. Use a negative number to start the video after the song." })),
+    el("div", { className: "actions" }, save, cancel),
+    message);
+
+  cancel.onclick = () => form.remove();
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const videoID = parseVideoID(link.value);
+    if (!videoID) {
+      message.textContent = "That doesn't look like a YouTube link.";
+      return;
+    }
+    if (map.hasVideo && map.videoID && videoID !== map.videoID &&
+        !confirm("This map already has a video for a different link. It will be renamed to .old and you'll need to upload the new one. Continue?")) {
+      return;
+    }
+    save.disabled = true;
+    message.textContent = "Saving…";
+    try {
+      const response = await fetch(`/api/config/${map.index}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoID, title: title.value.trim(), offset: Math.round(Number(offset.value) || 0) }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      refreshMap(map.index, card);
+    } catch (error) {
+      save.disabled = false;
+      message.textContent = `Couldn't save: ${error.message || "the Quest stopped responding"}`;
+    }
+  };
+  return form;
+}
+
+function renderMap(map) {
+  const card = el("div", { className: "card" });
+  card.hidden = !matchesSearch(map);
+  card.map = map;
+
+  const mapLine = [map.songAuthor, map.mapper ? `mapped by ${map.mapper}` : null].filter(Boolean).join(" · ");
+  let status;
+  let details = null;
+  if (!map.hasConfig) {
+    status = el("div", { className: "status none", textContent: "No config" });
+  } else {
+    status = el("div", { className: `status ${map.hasVideo ? "ok" : "missing"}`, textContent: map.hasVideo ? "Has video" : "Missing video" });
+    const videoUrl = map.videoID ? `https://www.youtube.com/watch?v=${map.videoID}` : null;
+    details = el("div", { className: "meta" },
+      "Video: ",
+      videoUrl ? el("a", { href: videoUrl, target: "_blank", rel: "noopener", textContent: map.title || map.videoID }) : (map.title || "unknown"),
+      formatDuration(map.duration) ? ` (${formatDuration(map.duration)})` : null,
+      ` · offset ${map.offset} ms`,
+      map.bundled ? " · built-in config" : null);
+  }
+
+  card.append(el("div", { className: "row" },
+    el("div", {}, el("div", { className: "song", textContent: map.songName }), el("div", { className: "meta", textContent: mapLine }), details),
+    status));
+
+  const actions = el("div", { className: "actions" });
+  if (map.hasConfig) {
+    const input = el("input", { type: "file", accept: "video/mp4,video/webm,video/x-matroska,video/quicktime,.mp4,.webm,.mkv,.mov" });
+    input.onchange = () => { if (input.files.length) upload(map, input.files[0], card); };
+    actions.append(el("label", { className: "button primary" }, map.hasVideo ? "Replace video" : "Upload video", input));
+    if (map.videoID && navigator.clipboard) {
+      const copy = el("button", { textContent: "Copy yt-dlp command" });
+      copy.onclick = async () => {
+        await navigator.clipboard.writeText(ytDlpCommand(map));
+        copy.textContent = "Copied";
+        setTimeout(() => { copy.textContent = "Copy yt-dlp command"; }, 1500);
+      };
+      actions.append(copy);
+    }
+  }
+  const edit = el("button", { textContent: map.hasConfig ? "Edit config" : "Add video" });
+  edit.onclick = () => { if (!card.querySelector("form.config")) card.append(configForm(map, card)); };
+  actions.append(edit);
+  card.append(actions);
+  return card;
+}
+
+function section(title, list) {
+  if (!list.length) return [];
+  return [el("h2", { textContent: `${title} (${list.length})` }), ...list.map(renderMap)];
+}
+
+async function load() {
+  try {
+    maps = await fetchMaps();
+  } catch {
+    content.replaceChildren(el("p", { className: "empty", textContent: "Couldn't reach the Quest. Is Beat Saber open with the upload page enabled?" }));
+    return;
+  }
+  const byName = (a, b) => a.songName.localeCompare(b.songName);
+  const sorted = [...maps].sort(byName);
+  const sections = [
+    ...section("Missing video", sorted.filter(m => m.hasConfig && !m.hasVideo)),
+    ...section("Has video", sorted.filter(m => m.hasVideo)),
+    ...section("No Cinema config", sorted.filter(m => !m.hasConfig)),
+  ];
+  content.replaceChildren(...(sections.length ? sections : [el("p", { className: "empty", textContent: "No custom maps found on this Quest." })]));
+}
+
+search.oninput = () => {
+  for (const card of content.querySelectorAll(".card")) card.hidden = !matchesSearch(card.map);
+};
+
+load();
+</script>
+</body>
+</html>
